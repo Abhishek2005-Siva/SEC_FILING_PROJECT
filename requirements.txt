@@ -1,0 +1,8 @@
+tqdm
+pandas
+requests
+bs4
+gspread
+openpyxl
+streamlit
+urllib3
