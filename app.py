@@ -38,17 +38,19 @@ MAX_RETRIES = 3
 # Common filing types for user selection
 COMMON_FILING_TYPES = [
     '10-K', '10-Q', '8-K', 'DEF 14A', 
-    'S-1', 'S-3', 'F-1', '20-F', 
-    'SCHEDULE 13D', 'SCHEDULE 13G'
+    'S-1', 'S-3', 'F-1', '20-F'
 ]
 
-# Predefined custom filing type groups
+# Predefined custom filing type groups (shown as options but will expand to multiple types)
 CUSTOM_FILING_GROUPS = {
-    "non-mgt": ["DEFC14A", "DEFC14C", "DEFN14A", "DEFR14A", "DFAN14A", 
-                "DFRN14A", "PREC14A", "PREC14C", "PREN14A", "PRER14A", "PRRN14A"],
-    "13d": ["SC 13D", "SCHEDULE 13D"],
-    "13g": ["SC 13G", "SCHEDULE 13G"]
+    "Non-mgt": ["DEFC14A", "DEFC14C", "DEFN14A", "DEFR14A", "DFAN14A", 
+                            "DFRN14A", "PREC14A", "PREC14C", "PREN14A", "PRER14A", "PRRN14A"],
+    "13D": ["SC 13D", "SCHEDULE 13D"],
+    "13G": ["SC 13G", "SCHEDULE 13G"]
 }
+
+for i in CUSTOM_FILING_GROUPS.values():
+    COMMON_FILING_TYPES+=i
 
 # Combine all options for the multiselect
 ALL_FILING_OPTIONS = COMMON_FILING_TYPES + list(CUSTOM_FILING_GROUPS.keys())
@@ -63,23 +65,24 @@ with st.sidebar:
                          (datetime.now().date() - timedelta(days=1), 
                           datetime.now().date() - timedelta(days=1)))
 
-    # Filing Type Selection
+    # Filing Type Selection - now includes both individual types and groups
     st.subheader("Filing Type Selection")
-    selected_types = st.multiselect(
-        "Select from common filing types:",
-        options=COMMON_FILING_TYPES,
-        default=['10-K']
+    selected_options = st.multiselect(
+        "Select filing types or groups:",
+        options=ALL_FILING_OPTIONS,
+        default=['10-K'],
+        help="Select individual filing types or predefined groups"
     )
     
     # Custom filing types input
     custom_type = st.text_input(
-        "Enter custom filing type(s) or group names:",
-        help="Example: '10-K, 10-Q, 8-K' or 'non-mgt, 13d'"
+        "Or enter custom filing type(s):",
+        help="Example: '10-K, 10-Q, 8-K'"
     )
     
     # Add the checkbox for location/incorporation columns
     show_details = st.checkbox(
-        "Show Location and Incorporation Details",
+        "Show Location and Incorporation Details(Slower)",
         value=True,
         help="Toggle to show/hide location and incorporation columns"
     )
@@ -178,29 +181,24 @@ def get_filing_key(url):
 def make_clickable(url):
     return f'<a target="_blank" href="{url}" style="display: inline-block; padding: 0.25em 0.5em; background-color: #f0f2f6; border-radius: 3px; text-decoration: none;">View Filing</a>'
 
-def process_custom_input(custom_input):
-    """Process custom input to handle both individual types and group names"""
-    if not custom_input:
-        return []
-    
-    types = []
-    for item in [x.strip().lower() for x in custom_input.split(',') if x.strip()]:
-        # Check if it matches any group name
-        if item in CUSTOM_FILING_GROUPS:
-            types.extend(CUSTOM_FILING_GROUPS[item])
+def expand_filing_types(selected_options):
+    """Expand selected options to include all individual filing types"""
+    filing_types = []
+    for option in selected_options:
+        if option in CUSTOM_FILING_GROUPS:
+            filing_types.extend(CUSTOM_FILING_GROUPS[option])
         else:
-            # Treat as individual filing type (convert to uppercase)
-            types.append(item.upper())
-    return types
+            filing_types.append(option)
+    return filing_types
 
 # ===== MAIN EXECUTION =====
 if run_button and len(date_range) == 2:
-    # Start with selected types
-    filing_types = selected_types.copy()
+    # Start with selected options (expanding groups to their individual types)
+    filing_types = expand_filing_types(selected_options)
     
-    # Process custom input (can include both individual types and group names)
-    custom_types = process_custom_input(custom_type)
-    filing_types.extend(custom_types)
+    # Add custom types from text input
+    if custom_type:
+        filing_types.extend([x.strip().upper() for x in custom_type.split(',') if x.strip()])
     
     if not filing_types:
         st.error("Please select at least one filing type")
