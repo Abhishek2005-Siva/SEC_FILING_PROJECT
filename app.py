@@ -6,6 +6,7 @@ import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import re
+from bs4 import BeautifulSoup
 
 # ===== STATE NAME MAPPING =====
 STATE_ABBREV = {
@@ -144,8 +145,12 @@ class SECAPIClient:
         except Exception as e:
             st.warning(f"⚠️ Failed to fetch details for CIK {cik}: {str(e)[:100]}")
             return {"entity_name": "", "location": "", "incorporated": ""}
+        
+    
+    
 
 # ===== HELPER FUNCTIONS =====
+
 def extract_ticker(entity_name):
     """Extract ticker from entity name (if present in brackets)"""
     match = re.search(r"\(([^)]+)\)", entity_name)
@@ -178,10 +183,158 @@ def build_filing_url(cik, accession_number):
     except Exception as e:
         st.warning(f"URL generation error: {str(e)}")
         return "Invalid URL"
+    
 
 def make_clickable(url):
     return f'<a target="_blank" href="{url}" style="text-decoration: none;">🔗 View Filing</a>'
 
+def redo_clickable_link(clickable_link):
+    """
+    Convert a clickable HTML link back to its original URL.
+    
+    Args:
+        clickable_link (str): The HTML clickable link (e.g., '<a href="url">link text</a>')
+        
+    Returns:
+        str: The original URL or the input if no URL found
+    """
+    if not isinstance(clickable_link, str):
+        return clickable_link
+    
+    # Pattern to match the href attribute in an anchor tag
+    pattern = r'<a[^>]*href=["\']([^"\']*)["\'][^>]*>'
+    match = re.search(pattern, clickable_link)
+    
+    if match:
+        return match.group(1)
+    return clickable_link
+
+SEC_HEADERS = {
+    "User-Agent": "YourCompany Your.Name@example.com",  # REQUIRED by SEC
+    "Accept-Encoding": "gzip, deflate",
+    "Accept": "text/html,application/xhtml+xml"
+}
+def get_largest_document(filing_url):
+    """Find the largest document (typically main filing) from the index page"""
+    try:
+        if not filing_url or "unavailable" in filing_url:
+            return ""
+        
+        # Fetch the index page
+        response = requests.get(filing_url, headers=SEC_HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        # Parse the HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Find all document rows in the table
+        doc_rows = soup.select('table.tableFile tr')[1:]  # Skip header row
+        
+        largest_size = 0
+        largest_url = ""
+        
+        for row in doc_rows:
+            cells = row.find_all('td')
+            if len(cells) >= 4:
+                doc_type = cells[3].get_text().strip().lower()
+                doc_url = cells[2].find('a')['href'] if cells[2].find('a') else ""
+                size_text = cells[4].get_text().strip()
+                
+                # Convert size to bytes (example formats: "1234" or "1.2MB")
+                size = 0
+                if size_text:
+                    if 'KB' in size_text:
+                        size = float(size_text.replace('KB', '')) * 1024
+                    elif 'MB' in size_text:
+                        size = float(size_text.replace('MB', '')) * 1024 * 1024
+                    else:
+                        size = float(size_text) if size_text.replace('.', '').isdigit() else 0
+                
+                # Prefer HTML/HTM documents over others
+                if doc_url and (doc_url.endswith('.htm') or doc_url.endswith('.html')):
+                    if size > largest_size:
+                        largest_size = size
+                        largest_url = doc_url
+                elif not largest_url and doc_url:  # Fallback to any document if no HTML found
+                    if size > largest_size:
+                        largest_size = size
+                        largest_url = doc_url
+        
+        # Convert relative URL to absolute
+        if largest_url and not largest_url.startswith('http'):
+            base_url = filing_url[:filing_url.rfind('/')+1]
+            largest_url = f"https://www.sec.gov{largest_url}" if largest_url.startswith('/') else f"{base_url}{largest_url}"
+        
+        return largest_url
+    
+    except Exception as e:
+        st.warning(f"⚠️ Failed to find largest document: {str(e)[:100]}")
+        return "None"
+
+def get_matching_document(filing_url, form_type):
+    """Find the document that matches the form type from the index page"""
+    try:
+        if not filing_url or "unavailable" in filing_url:
+            return ""
+        
+        # Fetch the index page
+        response = requests.get(filing_url, headers=SEC_HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        # Parse the HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Find all document rows in the table
+        doc_rows = soup.select('table.tableFile tr')[1:]  # Skip header row
+        
+        best_match_url = ""
+        best_match_size = 0
+        
+        for row in doc_rows:
+            cells = row.find_all('td')
+            if len(cells) >= 4:
+                current_doc_type = cells[3].get_text().strip()
+                doc_url = cells[2].find('a')['href'] if cells[2].find('a') else ""
+                size_text = cells[4].get_text().strip()
+                
+                # Convert size to bytes
+                size = 0
+                if size_text:
+                    if 'KB' in size_text:
+                        size = float(size_text.replace('KB', '')) * 1024
+                    elif 'MB' in size_text:
+                        size = float(size_text.replace('MB', '')) * 1024 * 1024
+                    else:
+                        size = float(size_text) if size_text.replace('.', '').isdigit() else 0
+                
+                # Check if current document type matches the form type
+                if current_doc_type.upper() == form_type.upper():
+                    # Among matches, pick the largest one
+                    if size > best_match_size:
+                        best_match_size = size
+                        best_match_url = doc_url
+                
+                # Fallback: If no exact match, look for partial matches (e.g., "10-K/A")
+                elif not best_match_url and form_type.upper() in current_doc_type.upper():
+                    if size > best_match_size:
+                        best_match_size = size
+                        best_match_url = doc_url
+        
+        # If still no match, fall back to largest HTML document
+        if not best_match_url:
+            return get_largest_document(filing_url)
+        
+        # Convert relative URL to absolute
+        if best_match_url and not best_match_url.startswith('http'):
+            base_url = filing_url[:filing_url.rfind('/')+1]
+            best_match_url = f"https://www.sec.gov{best_match_url}" if best_match_url.startswith('/') else f"{base_url}{best_match_url}"
+        
+        return best_match_url
+    
+    except Exception as e:
+        st.warning(f"⚠️ Failed to find matching document: {str(e)[:100]}")
+        return "None"
+    
 # ===== MAIN PROCESSING =====
 if run_button and len(date_range) == 2:
     # Prepare filing types
@@ -255,10 +408,12 @@ if run_button and len(date_range) == 2:
                     details = client.get_company_details(cik)
                     entity_name =source.get("display_names", ["N/A"])[0]
                     ticker = extract_ticker(entity_name)
-                    print(ticker)
                     #print(ticker)
                     clean_entity = re.sub(r"\s*\([A-Z]+\)", "", entity_name)
                     cleaned = re.sub(r"\s*\([^)]*\)", "", source.get("display_names", ["N/A"])[0])
+                    filing_url = build_filing_url(cik, accession_number)
+                    main_doc_url = make_clickable(get_matching_document(filing_url, form))
+
                     
                     all_filings.append({
                         "Form": form,
@@ -268,7 +423,8 @@ if run_button and len(date_range) == 2:
                         "Filing Person": clean_entity,
                         "Located": details["location"],
                         "Incorporated": details["incorporated"],
-                        "Filing": filing_url
+                        "Filing": filing_url, 
+                        "Main Document":main_doc_url
                     })
                     
                 except Exception as e:
@@ -298,16 +454,20 @@ if run_button and len(date_range) == 2:
             df['Filing'] = df['Filing'].apply(make_clickable)
             
             # Final columns setup
-            final_columns = ['Form', 'Date Filed', 'Ticker','Filing Entity']
+            final_columns = ['Form', 'Date Filed', 'Ticker','Filing Entity','Filing','Main Document']
             if show_details:
                 final_columns.extend(['Filing Person','Located', 'Incorporated'])
-            final_columns.append('Filing')
 
             st.success(f"✅ Found {len(df)} filings")
             st.write(df[final_columns].to_html(escape=False, index=False), unsafe_allow_html=True)
             
             # CSV download
-            csv_df = df[[c for c in final_columns if c != 'Filing']]
+            csv_df = df[[c for c in final_columns]].copy()
+
+            # Convert clickable links back to plain URLs in the download copy
+            for column in ['Filing', 'Main Document']:
+                if column in csv_df.columns:
+                    csv_df[column] = csv_df[column].apply(redo_clickable_link)
             csv = csv_df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="Download as CSV",
