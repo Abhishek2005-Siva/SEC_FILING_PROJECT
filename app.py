@@ -298,7 +298,6 @@ def get_matching_document(filing_url, form_type):
                 size_text = cells[4].get_text().strip()
                 
                 # Skip if not an HTML document
-                print(doc_url)
                 if not doc_url.lower().endswith(('.htm', '.html')):
                     continue
                 
@@ -439,7 +438,6 @@ if run_button and len(date_range) == 2:
                     details = client.get_company_details(cik)
                     entity_name =source.get("display_names", ["N/A"])[0]
                     ticker = extract_ticker(entity_name)
-                    #print(ticker)
                     clean_entity = re.sub(r"\s*\([A-Z]+\)", "", entity_name)
                     cleaned = re.sub(r"\s*\([^)]*\)", "", source.get("display_names", ["N/A"])[0])
                     filing_url = build_filing_url(cik, accession_number)
