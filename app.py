@@ -272,7 +272,7 @@ def get_largest_document(filing_url):
         return "None"
 
 def get_matching_document(filing_url, form_type):
-    """Find the document that matches the form type from the index page"""
+    """Find the HTML document that matches the form type from the index page"""
     try:
         if not filing_url or "unavailable" in filing_url:
             return ""
@@ -297,6 +297,11 @@ def get_matching_document(filing_url, form_type):
                 doc_url = cells[2].find('a')['href'] if cells[2].find('a') else ""
                 size_text = cells[4].get_text().strip()
                 
+                # Skip if not an HTML document
+                print(doc_url)
+                if not doc_url.lower().endswith(('.htm', '.html')):
+                    continue
+                
                 # Convert size to bytes
                 size = 0
                 if size_text:
@@ -320,19 +325,45 @@ def get_matching_document(filing_url, form_type):
                         best_match_size = size
                         best_match_url = doc_url
         
-        # If still no match, fall back to largest HTML document
-        if not best_match_url:
-            return get_largest_document(filing_url)
+        # If we found a matching HTML document
+        if best_match_url:
+            # Convert relative URL to absolute
+            if not best_match_url.startswith('http'):
+                base_url = filing_url[:filing_url.rfind('/')+1]
+                best_match_url = f"https://www.sec.gov{best_match_url}" if best_match_url.startswith('/') else f"{base_url}{best_match_url}"
+            return best_match_url
         
-        # Convert relative URL to absolute
+        # If no matching HTML document found, return the largest HTML document as fallback
+        for row in doc_rows:
+            cells = row.find_all('td')
+            if len(cells) >= 4:
+                doc_url = cells[2].find('a')['href'] if cells[2].find('a') else ""
+                size_text = cells[4].get_text().strip()
+                
+                # Only consider HTML documents
+                if doc_url.lower().endswith(('.htm', '.html')):
+                    size = 0
+                    if size_text:
+                        if 'KB' in size_text:
+                            size = float(size_text.replace('KB', '')) * 1024
+                        elif 'MB' in size_text:
+                            size = float(size_text.replace('MB', '')) * 1024 * 1024
+                        else:
+                            size = float(size_text) if size_text.replace('.', '').isdigit() else 0
+                    
+                    if size > best_match_size:
+                        best_match_size = size
+                        best_match_url = doc_url
+        
+        # Convert relative URL to absolute for fallback document
         if best_match_url and not best_match_url.startswith('http'):
             base_url = filing_url[:filing_url.rfind('/')+1]
             best_match_url = f"https://www.sec.gov{best_match_url}" if best_match_url.startswith('/') else f"{base_url}{best_match_url}"
         
-        return best_match_url
+        return best_match_url if best_match_url else "None"
     
     except Exception as e:
-        st.warning(f"⚠️ Failed to find matching document: {str(e)[:100]}")
+        st.warning(f"⚠️ Failed to find HTML document: {str(e)[:100]}")
         return "None"
     
 # ===== MAIN PROCESSING =====
@@ -454,7 +485,7 @@ if run_button and len(date_range) == 2:
             df['Filing'] = df['Filing'].apply(make_clickable)
             
             # Final columns setup
-            final_columns = ['Form', 'Date Filed', 'Ticker','Filing Entity','Filing','Main Document']
+            final_columns = ['Filing','Main Document','Form', 'Date Filed', 'Ticker','Filing Entity']
             if show_details:
                 final_columns.extend(['Filing Person','Located', 'Incorporated'])
 
